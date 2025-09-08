@@ -1,12 +1,12 @@
 version: 1
 applications:
-  - frontend:
+  - appRoot: notesapp
+    frontend:
       phases:
         preBuild:
           commands:
             - nvm install 22
             - nvm use 22
-            # Write backend outputs to file for the frontend build
             - echo "$AMPLIFY_OUTPUTS" > amplify_outputs.json
             - npm ci
         build:
