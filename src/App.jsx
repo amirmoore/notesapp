@@ -1,217 +1,145 @@
-// notesapp/src/App.jsx
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Amplify } from "aws-amplify";
-import { generateClient } from "aws-amplify/data";
-import { uploadData, getUrl, remove as removeFromStorage } from "aws-amplify/storage";
-import {
-  Authenticator,
-  Button,
-  Flex,
-  Heading,
-  TextField,
-} from "@aws-amplify/ui-react";
+import { Authenticator } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 
-export default function App() {
-  const [notes, setNotes] = useState([]);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [file, setFile] = useState(null);
-  const [creating, setCreating] = useState(false);
-  const [ready, setReady] = useState(false);
+import awsExports from "./aws-exports";
+import { generateClient } from "aws-amplify/api";
+import { listTodos } from "./graphql/queries";
+import {
+  createTodo as createTodoMutation,
+  deleteTodo as deleteTodoMutation,
+} from "./graphql/mutations";
 
-  // hold the client after config
-  const clientRef = useRef(null);
+Amplify.configure(awsExports);
 
-  // 1) Load outputs at runtime, then configure Amplify and create the client
+const App = () => {
+  const [todos, setTodos] = useState([]);
+  const [formData, setFormData] = useState({ name: "", description: "" });
+
+  const client = generateClient();
+
+  async function fetchTodos() {
+    const apiData = await client.graphql({ query: listTodos });
+    setTodos(apiData.data.listTodos.items);
+  }
+
+  async function createTodo() {
+    if (!formData.name || !formData.description) return;
+    await client.graphql({
+      query: createTodoMutation,
+      variables: { input: formData },
+    });
+    setFormData({ name: "", description: "" });
+    fetchTodos();
+  }
+
+  async function deleteTodo(id) {
+    await client.graphql({
+      query: deleteTodoMutation,
+      variables: { input: { id } },
+    });
+    fetchTodos();
+  }
+
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/amplify_outputs.json", { cache: "no-store" });
-        const outputs = await res.json();
-        Amplify.configure(outputs);
-        clientRef.current = generateClient({ authMode: "userPool" });
-        setReady(true);
-      } catch (e) {
-        console.error("Failed to load amplify_outputs.json", e);
-      }
-    })();
+    fetchTodos();
   }, []);
 
-  // 2) Fetch notes once the client is ready
-  useEffect(() => {
-    if (!ready || !clientRef.current) return;
-    fetchNotes();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
-
-  async function fetchNotes() {
-    const { data, errors } = await clientRef.current.models.Note.list();
-    if (errors?.length) {
-      console.error(errors);
-      return;
-    }
-    const withUrls = await Promise.all(
-      data.map(async (n) => {
-        if (!n.imageKey) return n;
-        try {
-          const { url } = await getUrl({ key: n.imageKey });
-          return { ...n, imageUrl: url.toString() };
-        } catch {
-          return n;
-        }
-      })
-    );
-    withUrls.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-    setNotes(withUrls);
-  }
-
-  async function createNote(e) {
-    e?.preventDefault?.();
-    if (!name.trim() || !clientRef.current) return;
-
-    setCreating(true);
-    try {
-      let imageKey;
-      if (file) {
-        // If your Storage rule requires identity-specific paths, use:
-        // const { result } = await uploadData({
-        //   data: file,
-        //   path: ({ identityId }) => `media/${identityId}/${Date.now()}_${file.name}`,
-        // });
-        // imageKey = result.key;
-
-        imageKey = `images/${Date.now()}_${file.name}`;
-        await uploadData({
-          key: imageKey,
-          data: file,
-          options: { contentType: file.type || "application/octet-stream" },
-        }).result;
-      }
-
-      await clientRef.current.models.Note.create({
-        name: name.trim(),
-        description: description.trim(),
-        imageKey,
-      });
-
-      setName("");
-      setDescription("");
-      setFile(null);
-      await fetchNotes();
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function deleteNote(id, imageKey) {
-    if (!clientRef.current) return;
-    await clientRef.current.models.Note.delete({ id });
-    if (imageKey) {
-      try {
-        await removeFromStorage({ key: imageKey });
-      } catch (err) {
-        console.warn("Storage remove failed (non-fatal):", err);
-      }
-    }
-    await fetchNotes();
-  }
-
-  if (!ready) {
-    return (
-      <div style={{ maxWidth: 960, margin: "40px auto", padding: "24px" }}>
-        <Heading level={3}>Loading…</Heading>
+  // ... (inside the return statement of your component)
+return (
+  <Authenticator>
+    {({ signOut, user }) => (
+      <div style={{ padding: 20 }}>
+        {/* ... */}
+        <h3>My Todos</h3>
+        <div style={{ width: 350, padding: '20px' }}>
+          <input
+            style={{
+              border: '1px solid #d1d5db',
+              borderRadius: '0.375rem',
+              padding: '0.75rem',
+              width: '100%',
+              marginBottom: '15px'
+            }}
+            placeholder="Note name"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+          />
+          <input
+            style={{
+              border: '1px solid #d1d5db',
+              borderRadius: '0.375rem',
+              padding: '0.75rem',
+              width: '100%',
+              marginBottom: '15px'
+            }}
+            placeholder="Note description"
+            value={formData.description}
+            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+          />
+          <button
+            style={{
+              backgroundColor: '#0e858a',
+              color: 'white',
+              border: 'none',
+              borderRadius: '0.375rem',
+              padding: '1rem',
+              width: '100%',
+              cursor: 'pointer'
+            }}
+            onClick={createTodo}
+          >
+            Create Note
+          </button>
+        </div>
+        {/* ... */}
       </div>
-    );
-  }
-
+    )}
+  </Authenticator>
+);
+/*
   return (
-    <div style={{ maxWidth: 960, margin: "40px auto", padding: "24px" }}>
-      <Heading level={2}>Notes</Heading>
+    <Authenticator>
+      {({ signOut, user }) => (
+        <div style={{ padding: 20 }}>
+          <h2>Hello, {user?.username}</h2>
+          <button onClick={signOut}>Sign Out</button>
 
-      <Authenticator>
-        {({ signOut, user }) => (
-          <Flex direction="column" gap="1.25rem" marginTop="1rem">
-            <div>
-              Signed in as <strong>{user?.username}</strong>
-            </div>
+          <h3>My Todos</h3>
+          <input
+            placeholder="Note name"
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+          />
+          <input
+            placeholder="Note description"
+            value={formData.description}
+            onChange={(e) =>
+              setFormData({ ...formData, description: e.target.value })
+            }
+          />
+          <button onClick={createTodo}>Create Note</button>
 
-            <form onSubmit={createNote}>
-              <Flex direction="column" gap="0.75rem">
-                <TextField
-                  label="Title"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g., Grocery list"
-                  required
-                />
-                <TextField
-                  label="Description"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Optional details…"
-                />
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
-                />
-                <Button type="submit" isDisabled={creating}>
-                  {creating ? "Creating…" : "Create note"}
-                </Button>
-              </Flex>
-            </form>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
-                gap: "16px",
-                marginTop: "12px",
-              }}
-            >
-              {notes.map((n) => (
-                <div
-                  key={n.id}
-                  style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    padding: 16,
-                  }}
+          <div style={{ marginTop: 20 }}>
+            {todos.map((t) => (
+              <div key={t.id} style={{ marginBottom: 10 }}>
+                <strong>{t.name}</strong> – {t.description}
+                <button
+                  onClick={() => deleteTodo(t.id)}
+                  style={{ marginLeft: 10 }}
                 >
-                  <h3 style={{ margin: "0 0 4px" }}>{n.name}</h3>
-                  {n.description && (
-                    <p style={{ margin: "0 0 8px", color: "#555" }}>{n.description}</p>
-                  )}
-                  {n.imageUrl && (
-                    <img
-                      src={n.imageUrl}
-                      alt={n.name}
-                      style={{
-                        width: "100%",
-                        height: 160,
-                        objectFit: "cover",
-                        borderRadius: 8,
-                        marginBottom: 8,
-                      }}
-                    />
-                  )}
-                  <Button
-                    variation="destructive"
-                    onClick={() => deleteNote(n.id, n.imageKey)}
-                  >
-                    Delete
-                  </Button>
-                </div>
-              ))}
-            </div>
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Authenticator>
+  
+  ); */
+};
 
-            <Button onClick={signOut} variation="link">
-              Sign out
-            </Button>
-          </Flex>
-        )}
-      </Authenticator>
-    </div>
-  );
-}
+export default App;
+
