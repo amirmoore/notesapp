@@ -1,77 +1,175 @@
-// src/App.jsx
-import { useEffect, useState } from "react";
-import { Amplify } from "aws-amplify";
-import { generateClient } from "aws-amplify/data";
-import { uploadData, getUrl, remove as removeFromStorage } from "aws-amplify/storage";
-import {
-  Authenticator,
-  Button,
-  Divider,
-  Flex,
-  Grid,
-  Heading,
-  Text,
-  TextField,
-  View,
-} from "@aws-amplify/ui-react";
-import "@aws-amplify/ui-react/styles.css";
+import { useEffect, useState } from 'react'
+import { Amplify } from 'aws-amplify'
+import outputs from '../amplify_outputs.json'
 
-import outputs from "/amplify_outputs.json";
+import { Authenticator, Button, Flex, Heading, TextField } from '@aws-amplify/ui-react'
+import '@aws-amplify/ui-react/styles.css'
 
-// Configure Amplify
-Amplify.configure(outputs);
+import { generateClient } from 'aws-amplify/data'
+import { uploadData, getUrl, remove as removeFromStorage } from 'aws-amplify/storage'
 
-// Data client (expects a model named `Note`)
-const client = generateClient({ authMode: "userPool" });
+const client = generateClient()
+
+Amplify.configure(outputs)
 
 export default function App() {
-  const [notes, setNotes] = useState([]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [notes, setNotes] = useState([])
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [file, setFile] = useState(null)
+  const [creating, setCreating] = useState(false)
 
-  // Fetch & live-update notes; resolve signed image URLs if present
-  useEffect(() => {
-    const sub = client.models.Note.observeQuery().subscribe({
-      next: async ({ items }) => {
-        const withUrls = await Promise.all(
-          items.map(async (n) => {
-            if (!n.imageKey) return n;
-            try {
-              const { url } = await getUrl({ key: n.imageKey });
-              return { ...n, imageUrl: url.toString() };
-            } catch {
-              return n;
-            }
-          })
-        );
-        setNotes(withUrls);
-      },
-    });
-    return () => sub.unsubscribe();
-  }, []);
+  async function fetchNotes() {
+    const { data, errors } = await client.models.Note.list()
+    if (errors?.length) {
+      console.error(errors)
+      return
+    }
 
-  // Create a note; optionally upload an image to Storage
+    const withUrls = await Promise.all(
+      data.map(async (n) => {
+        if (n.imageKey) {
+          try {
+            const urlRes = await getUrl({ key: n.imageKey })
+            return { ...n, imageUrl: urlRes?.url?.toString() }
+          } catch {
+            return n
+          }
+        }
+        return n
+      })
+    )
+
+    setNotes(withUrls.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')))
+  }
+
   async function createNote(e) {
-    e.preventDefault();
-    setIsSubmitting(true);
-    try {
-      const form = new FormData(e.currentTarget);
-      const name = String(form.get("name") || "").trim();
-      const content = String(form.get("content") || "").trim();
-      const file = form.get("image");
+    e?.preventDefault?.()
+    if (!name.trim()) return
 
-      let imageKey;
-      if (file instanceof File && file.size > 0) {
-        const { result } = await uploadData({
+    setCreating(true)
+    try {
+      let imageKey
+
+      if (file) {
+        imageKey = `images/${Date.now()}_${file.name}`
+        await uploadData({
+          key: imageKey,
           data: file,
-          path: ({ identityId }) => `media/${identityId}/${file.name}`,
-        });
-        imageKey = result.key;
+          options: { contentType: file.type || 'application/octet-stream' },
+        }).result
       }
 
-      await client.models.Note.create({ name, content, imageKey });
-      e.currentTarget.reset();
+      await client.models.Note.create({
+        name: name.trim(),
+        description: description.trim(),
+        imageKey,
+      })
+
+      setName('')
+      setDescription('')
+      setFile(null)
+      await fetchNotes()
     } finally {
-      setIsSubmitting(false);
+      setCreating(false)
     }
   }
+
+  async function deleteNote(id, imageKey) {
+    await client.models.Note.delete({ id })
+    if (imageKey) {
+      try {
+        await removeFromStorage({ key: imageKey })
+      } catch (err) {
+        console.warn('Storage remove failed (non-fatal):', err)
+      }
+    }
+    await fetchNotes()
+  }
+
+  useEffect(() => {
+    fetchNotes()
+  }, [])
+
+  return (
+    <div style={{ maxWidth: 960, margin: '40px auto', padding: '24px' }}>
+      <Heading level={2}>Notes</Heading>
+
+      <Authenticator>
+        {({ signOut, user }) => (
+          <Flex direction="column" gap="1.25rem" marginTop="1rem">
+            <div>Signed in as <strong>{user?.username}</strong></div>
+
+            <form onSubmit={createNote}>
+              <Flex direction="column" gap="0.75rem">
+                <TextField
+                  label="Title"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g., Grocery list"
+                  required
+                />
+                <TextField
+                  label="Description"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="Optional details…"
+                />
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setFile(e.target.files?.[0] || null)}
+                />
+                <Button type="submit" isDisabled={creating}>
+                  {creating ? 'Creating…' : 'Create note'}
+                </Button>
+              </Flex>
+            </form>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+                gap: '16px',
+                marginTop: '12px',
+              }}
+            >
+              {notes.map((n) => (
+                <div
+                  key={n.id}
+                  style={{
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 12,
+                    padding: 16,
+                  }}
+                >
+                  <h3 style={{ margin: '0 0 4px' }}>{n.name}</h3>
+                  {n.description && (
+                    <p style={{ margin: '0 0 8px', color: '#555' }}>{n.description}</p>
+                  )}
+                  {n.imageUrl && (
+                    <img
+                      src={n.imageUrl}
+                      alt={n.name}
+                      style={{ width: '100%', height: 160, objectFit: 'cover', borderRadius: 8, marginBottom: 8 }}
+                    />
+                  )}
+                  <Button
+                    variation="destructive"
+                    onClick={() => deleteNote(n.id, n.imageKey)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              ))}
+            </div>
+
+            <Button onClick={signOut} variation="link">
+              Sign out
+            </Button>
+          </Flex>
+        )}
+      </Authenticator>
+    </div>
+  )
 }
