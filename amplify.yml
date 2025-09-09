@@ -1,0 +1,21 @@
+version: 1
+applications:
+  - appRoot: notesapp
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - nvm install 22
+            - nvm use 22
+            - npm ci
+            - node -e "const fs=require('fs');const o=JSON.parse(process.env.AMPLIFY_OUTPUTS||'{}');fs.mkdirSync('src',{recursive:true});fs.writeFileSync('src/aws-exports.js','export default '+JSON.stringify(o,null,2)+'\\n');"
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: dist
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
